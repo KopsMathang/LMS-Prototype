@@ -15,12 +15,11 @@ public class LeaveService {
     private int nextRequestId = 100;
 
     public LeaveService() {
-        // Mock data
-        employees.put(1, new Employee(1, "Alice Johnson", "IT", 12.0, 8.0));
-        employees.put(2, new Employee(2, "Bob Smith", "IT", 10.0, 5.0));
-        employees.put(3, new Employee(3, "Charlie Brown", "HR", 15.0, 10.0));
-        // Manager (employeeId 10) manages IT department
-        employees.put(10, new Employee(10, "Manager Lee", "IT", 0, 0));
+        // Mock data – added email addresses
+        employees.put(1, new Employee(1, "Alice Johnson", "IT", 12.0, 8.0, "alice@example.com"));
+        employees.put(2, new Employee(2, "Bob Smith", "IT", 10.0, 5.0, "bob@example.com"));
+        employees.put(3, new Employee(3, "Charlie Brown", "HR", 15.0, 10.0, "charlie@example.com"));
+        employees.put(10, new Employee(10, "Manager Lee", "IT", 0, 0, "manager@example.com"));
     }
 
     public double getLeaveBalance(int employeeId, String leaveType) {
@@ -31,10 +30,27 @@ public class LeaveService {
         return 0;
     }
 
+    // PATCH: Prevent overlapping pending leave requests
+    private boolean hasOverlappingPendingRequest(int employeeId, LocalDate start, LocalDate end) {
+        for (LeaveRequest req : leaveRequests.values()) {
+            if (req.getEmployeeId() == employeeId && "PENDING".equals(req.getStatus())) {
+                // Check if date ranges overlap
+                if (!(end.isBefore(req.getStartDate()) || start.isAfter(req.getEndDate()))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     public LeaveRequest submitLeaveRequest(int employeeId, String leaveType, LocalDate startDate,
                                            LocalDate endDate, String reason) throws IllegalArgumentException {
-        // Validate balance
-        double requiredDays = ChronoUnit.DAYS.between(startDate, endDate) + 1; // inclusive
+        // PATCH: Check for overlapping pending request
+        if (hasOverlappingPendingRequest(employeeId, startDate, endDate)) {
+            throw new IllegalArgumentException("You already have a pending leave request that overlaps with these dates.");
+        }
+
+        double requiredDays = ChronoUnit.DAYS.between(startDate, endDate) + 1;
         double balance = getLeaveBalance(employeeId, leaveType);
         if (requiredDays > balance) {
             throw new IllegalArgumentException("Insufficient leave balance. Required: " + requiredDays +
@@ -43,7 +59,6 @@ public class LeaveService {
         if (startDate.isAfter(endDate)) {
             throw new IllegalArgumentException("Start date must be before end date");
         }
-        // Sick leave requires reason (simple check)
         if ("SICK".equalsIgnoreCase(leaveType) && (reason == null || reason.trim().isEmpty())) {
             throw new IllegalArgumentException("Reason required for sick leave");
         }
@@ -71,7 +86,7 @@ public class LeaveService {
     public void approveRequest(int requestId, int managerId, String comments) throws Exception {
         LeaveRequest req = leaveRequests.get(requestId);
         if (req == null) throw new Exception("Request not found");
-        if (!"PENDING".equals(req.getStatus())) throw new Exception("Request already processed");
+        if (!"PENDING".equals(req.getStatus())) throw new Exception("Request already processed (status: " + req.getStatus() + ")");
         Employee manager = employees.get(managerId);
         Employee emp = employees.get(req.getEmployeeId());
         if (manager == null || emp == null || !manager.getDepartment().equals(emp.getDepartment())) {
@@ -87,6 +102,11 @@ public class LeaveService {
         req.setStatus("APPROVED");
         req.setApprovedBy(managerId);
         req.setComments(comments);
+
+        // NEW FEATURE: Send email notification
+        String subject = "Leave Request Approved";
+        String body = "Dear " + emp.getName() + ",\n\nYour leave request from " + req.getStartDate() + " to " + req.getEndDate() + " has been APPROVED.\n\nComments: " + comments;
+        EmailService.sendNotification(emp.getEmail(), subject, body);
     }
 
     public void rejectRequest(int requestId, int managerId, String comments) throws Exception {
@@ -96,6 +116,12 @@ public class LeaveService {
         req.setStatus("REJECTED");
         req.setApprovedBy(managerId);
         req.setComments(comments);
+
+        // NEW FEATURE: Send email notification
+        Employee emp = employees.get(req.getEmployeeId());
+        String subject = "Leave Request Rejected";
+        String body = "Dear " + emp.getName() + ",\n\nYour leave request from " + req.getStartDate() + " to " + req.getEndDate() + " has been REJECTED.\n\nComments: " + comments;
+        EmailService.sendNotification(emp.getEmail(), subject, body);
     }
 
     public List<LeaveRequest> getRequestsForEmployee(int employeeId) {
